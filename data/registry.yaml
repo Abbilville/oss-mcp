@@ -1,0 +1,45 @@
+# Default/Sample Multi-Repo Architecture Manifest
+# Auto-generate your own with: npx oss-mcp scan <workspace_path> --output <output_path>
+
+repos:
+  - name: backend-service
+    owner: backend-team
+    local_path: ./services/backend-service
+    description: >-
+      Core REST API backend service built with Node.js & Express.
+      Handles data persistence, user sessions, authentication, and database migrations.
+    tech_stack:
+      - Node.js
+      - Express
+      - PostgreSQL
+      - Redis
+      - JWT
+    entry_point: src/server.js
+    port: 4000
+
+  - name: web-frontend
+    owner: frontend-team
+    local_path: ./services/web-frontend
+    description: >-
+      Customer single-page application built with React.
+      Communicates with backend-service via Axios REST client.
+    tech_stack:
+      - React
+      - TypeScript
+      - Redux Toolkit
+      - Axios
+    entry_point: src/index.tsx
+    port: 3000
+
+relationships:
+  - source: web-frontend
+    target: backend-service
+    type: api_call
+    description: >-
+      Frontend invokes backend REST endpoints for authentication and business resources.
+
+  - source: web-frontend
+    target: backend-service
+    type: depends_on
+    description: >-
+      Frontend relies on backend session lifecycle, JWT refresh cycle, and permissions.

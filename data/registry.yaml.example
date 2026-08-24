@@ -1,0 +1,45 @@
+# Repository Manifest & Relationship Graph Example
+# Use this as a template or generate automatically with: npx oss-mcp scan <workspace_path>
+
+repos:
+  - name: auth-service
+    owner: backend-team
+    local_path: /path/to/services/auth-service
+    description: >-
+      Authentication and Authorization microservice (Node.js / Express or Python / FastAPI).
+      Handles JWT token issuance, session verification, and user management.
+    tech_stack:
+      - Node.js
+      - Express
+      - PostgreSQL
+      - Redis
+      - JWT
+    entry_point: src/index.js
+    port: 4000
+
+  - name: web-frontend
+    owner: frontend-team
+    local_path: /path/to/services/web-frontend
+    description: >-
+      Customer single-page application built with React and TypeScript.
+      Integrates with auth-service and backend APIs via Axios.
+    tech_stack:
+      - React
+      - TypeScript
+      - Axios
+      - Redux Toolkit
+    entry_point: src/index.tsx
+    port: 3000
+
+relationships:
+  - source: web-frontend
+    target: auth-service
+    type: api_call
+    description: >-
+      Frontend calls POST /api/auth/login and POST /api/auth/refresh for user session management.
+
+  - source: web-frontend
+    target: auth-service
+    type: depends_on
+    description: >-
+      Frontend relies on auth-service for JWT token refresh lifecycle and permission verification.

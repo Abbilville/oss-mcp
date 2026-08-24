@@ -1,0 +1,15 @@
+# Central Multi-Project Registry Catalog Example
+# Copy this file to projects.yaml and adjust paths to your local multi-repo setups.
+
+projects:
+  ecommerce:
+    name: "E-Commerce System"
+    description: "Core microservices for e-commerce platform (frontend, api-gateway, auth-service)"
+    registry_path: "./data/registry.yaml"
+    root_path: "/path/to/ecommerce/workspace"
+
+  # analytics:
+  #   name: "Analytics Service"
+  #   description: "Event streaming and reporting backend"
+  #   registry_path: "/path/to/analytics/registry.yaml"
+  #   root_path: "/path/to/analytics"

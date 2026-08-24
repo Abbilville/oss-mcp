@@ -1,0 +1,26 @@
+{
+  "name": "oss-mcp",
+  "version": "0.1.0",
+  "description": "MCP Server with Multi-Repo Architecture Hub",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "oss-mcp": "./bin/cli.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "oss-mcp": "node bin/cli.js",
+    "test": "node --test test/**/*.test.js"
+  },
+  "author": "Abbilville",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.5.0",
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.23.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

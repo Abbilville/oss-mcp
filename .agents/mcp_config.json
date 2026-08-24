@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "oss-mcp": {
+      "command": "node",
+      "args": [
+        "./src/server.js"
+      ]
+    }
+  }
+}
