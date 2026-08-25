@@ -14,6 +14,8 @@ import { z } from "zod";
 
 import {
   batchIndexProject,
+  deleteIndexedGraph,
+  getRepoIndexInfo,
   listIndexedProjects,
   purgeProjectGraphs,
 } from "./indexer.js";
@@ -105,6 +107,19 @@ server.tool(
         };
       }
 
+      const baseDir = registry.source_path ? path.dirname(registry.source_path) : process.cwd();
+      const repoDict = repo.toDict();
+      const fullPath = repo.local_path
+        ? (path.isAbsolute(repo.local_path) ? repo.local_path : path.resolve(baseDir, repo.local_path))
+        : null;
+
+      const idxInfo = getRepoIndexInfo(fullPath, repo.name);
+      repoDict.is_indexed = idxInfo.is_indexed;
+      repoDict.index_nodes = idxInfo.index_nodes;
+      repoDict.index_edges = idxInfo.index_edges;
+      repoDict.indexed_at = idxInfo.indexed_at;
+      repoDict.index_project = idxInfo.index_project;
+
       const inbound = registry
         .getInboundRelationships(repo.name)
         .map((rel) => rel.toDict());
@@ -114,7 +129,7 @@ server.tool(
 
       const result = {
         project_id: registry.project_id,
-        repo: repo.toDict(),
+        repo: repoDict,
         relationships: {
           inbound,
           outbound,
@@ -235,11 +250,18 @@ server.tool(
 server.tool(
   "list_projects",
   "List all registered multi-repo projects, catalogs, and codebase-memory-mcp index status.",
-  {},
-  async () => {
+  {
+    project: z
+      .string()
+      .optional()
+      .describe(
+        "Optional project ID, workspace directory, or registry.yaml file path to inspect for index status."
+      ),
+  },
+  async ({ project }) => {
     try {
       const registered = listAvailableProjects();
-      const indexed = await listIndexedProjects();
+      const indexed = await listIndexedProjects(project);
       return {
         content: [
           {
@@ -248,6 +270,8 @@ server.tool(
               {
                 registered_projects: registered,
                 indexed_codebase_memory_graphs: indexed,
+                total_registered_projects: registered.length,
+                total_indexed_graphs: indexed.length,
               },
               null,
               2
@@ -403,17 +427,33 @@ server.tool(
   },
   async ({ project, purge_graphs = true, delete_manifest = false }) => {
     try {
-      const registry = loadRegistry(project);
+      let registry = null;
+      try {
+        registry = loadRegistry(project);
+      } catch {}
+
+      const pId = registry ? registry.project_id : String(project);
       let purgeReport = null;
       if (purge_graphs) {
-        purgeReport = await purgeProjectGraphs(registry);
+        if (registry) {
+          purgeReport = await purgeProjectGraphs(registry);
+        } else {
+          const res = await deleteIndexedGraph(pId);
+          purgeReport = {
+            project_id: pId,
+            total_repos: 1,
+            purged: res.status === "success" ? 1 : 0,
+            results: [res],
+          };
+        }
       }
 
-      const unregistered = unregisterProjectFromCatalog(registry.project_id);
+      const unregistered = unregisterProjectFromCatalog(pId);
 
       let manifestDeleted = false;
       if (
         delete_manifest &&
+        registry &&
         registry.source_path &&
         fs.existsSync(registry.source_path)
       ) {
@@ -428,7 +468,7 @@ server.tool(
             text: JSON.stringify(
               {
                 status: "success",
-                project_id: registry.project_id,
+                project_id: pId,
                 unregistered_from_catalog: unregistered,
                 manifest_deleted: manifestDeleted,
                 graph_purge_report: purgeReport,

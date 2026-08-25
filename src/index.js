@@ -6,3 +6,5 @@ export * from "./registry.js";
 export * from "./scanner.js";
 export * from "./indexer.js";
 export * from "./server.js";
+export * from "./agent-setup.js";
+

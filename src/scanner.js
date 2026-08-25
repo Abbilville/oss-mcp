@@ -111,9 +111,19 @@ function scanPackageJson(repoDir) {
         "app.js",
         "server.js",
         "src/index.js",
+        "src/index.ts",
         "src/index.tsx",
+        "src/main.js",
         "src/main.ts",
+        "src/main.tsx",
+        "src/server.js",
+        "src/server.ts",
+        "src/app.js",
+        "src/app.ts",
+        "src/App.tsx",
         "index.js",
+        "index.ts",
+        "index.tsx",
       ];
       for (const cand of candidates) {
         if (fs.existsSync(path.join(repoDir, cand))) {
@@ -168,6 +178,8 @@ function scanPythonDir(repoDir) {
     "app.py",
     "src/main.py",
     "app/main.py",
+    "app/api.py",
+    "src/app/main.py",
     "manage.py",
     "wsgi.py",
   ];
@@ -256,7 +268,7 @@ function inferPort(repoDir) {
     }
   }
 
-  // 2. Scan entry point or main code files for port numbers
+  // 2. Scan entry point, config, or main code files for port numbers
   const filesToScan = [
     "app.js",
     "server.js",
@@ -269,6 +281,11 @@ function inferPort(repoDir) {
     "src/index.ts",
     "src/server.ts",
     "src/main.ts",
+    "vite.config.ts",
+    "vite.config.js",
+    "Dockerfile",
+    "docker-compose.yml",
+    "docker-compose.yaml",
     "main.py",
     "app/main.py",
     "main.go",
@@ -289,6 +306,8 @@ function inferPort(repoDir) {
         const match =
           text.match(/(?:port|listen)\s*[:=(]\s*(?:process\.env\.PORT\s*\|\|\s*)?(\d{2,5})/i) ||
           text.match(/(?:Run|Listen|ListenAndServe)\s*\(\s*["']:?(\d{2,5})["']/i) ||
+          text.match(/EXPOSE\s+(\d{2,5})/i) ||
+          text.match(/["']?(\d{2,5}):(\d{2,5})["']?/) ||
           text.match(/(?:server\.port|port)\s*[:=]\s*(\d{2,5})/i);
         if (match) {
           const p = parseInt(match[1], 10);
@@ -298,6 +317,36 @@ function inferPort(repoDir) {
     }
   }
   return null;
+}
+
+function collectRepoCodeText(repoPath, maxDepth = 3) {
+  let combined = "";
+  const codeExtRegex = /\.(js|ts|jsx|tsx|py|json|env|yaml|yml|properties|go|java)$/;
+
+  function walk(currentDir, currentDepth) {
+    if (currentDepth > maxDepth || !fs.existsSync(currentDir)) return;
+    try {
+      const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith(".") || IGNORED_DIRS.has(entry.name)) continue;
+        const full = path.join(currentDir, entry.name);
+        if (entry.isFile() && codeExtRegex.test(entry.name)) {
+          try {
+            // Limit file size to 256KB to avoid massive files slowing scan
+            const stat = fs.statSync(full);
+            if (stat.size < 256 * 1024) {
+              combined += fs.readFileSync(full, "utf-8") + "\n";
+            }
+          } catch {}
+        } else if (entry.isDirectory() && currentDepth < maxDepth) {
+          walk(full, currentDepth + 1);
+        }
+      }
+    } catch {}
+  }
+
+  walk(repoPath, 1);
+  return combined;
 }
 
 function inferRelationships(repos, workspacePath) {
@@ -315,24 +364,7 @@ function inferRelationships(repos, workspacePath) {
     if (!repo.local_path || !fs.existsSync(repo.local_path)) continue;
 
     // Check if this repo calls other repos via port or name
-    let combinedContent = "";
-    try {
-      const entries = fs.readdirSync(repo.local_path, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isFile() && /\.(js|ts|jsx|tsx|py|json|env|yaml|yml)$/.test(entry.name)) {
-          combinedContent += fs.readFileSync(path.join(repo.local_path, entry.name), "utf-8") + "\n";
-        }
-      }
-      const srcDir = path.join(repo.local_path, "src");
-      if (fs.existsSync(srcDir) && fs.statSync(srcDir).isDirectory()) {
-        const srcEntries = fs.readdirSync(srcDir, { withFileTypes: true });
-        for (const entry of srcEntries) {
-          if (entry.isFile() && /\.(js|ts|jsx|tsx|py)$/.test(entry.name)) {
-            combinedContent += fs.readFileSync(path.join(srcDir, entry.name), "utf-8") + "\n";
-          }
-        }
-      }
-    } catch { }
+    const combinedContent = collectRepoCodeText(repo.local_path);
 
     // Check port connections
     for (const [targetPort, targetName] of repoPortMap.entries()) {

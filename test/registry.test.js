@@ -138,4 +138,9 @@ describe("Registry Persistence & Resolution", () => {
     const projects = listAvailableProjects();
     assert.equal(Array.isArray(projects), true);
   });
+
+  it("should resolve registry path when pointing to directory containing registry.yaml", () => {
+    const loadedFromDir = loadRegistry(tmpDir);
+    assert.equal(loadedFromDir.project_id, "fintech");
+  });
 });

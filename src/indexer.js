@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { ProjectRegistry, loadRegistry } from "./registry.js";
+import { ProjectRegistry, loadRegistry, listAvailableProjects } from "./registry.js";
 
 const MISSING_CBM_HELP =
   "codebase-memory-mcp executable not found on PATH or standard install directories. " +
@@ -60,30 +60,50 @@ export function findCodebaseMemoryExecutable() {
   return process.platform === "win32" ? "codebase-memory-mcp.cmd" : "codebase-memory-mcp";
 }
 
+export function checkCodebaseMemoryStatus() {
+  const found = findExecutable("codebase-memory-mcp");
+  const fallbackCmd = process.platform === "win32" ? "codebase-memory-mcp.cmd" : "codebase-memory-mcp";
+  const isAvailable = Boolean(found);
+
+  return {
+    available: isAvailable,
+    executable: found || fallbackCmd,
+    isExplicitPath: Boolean(found),
+    installCommand: "npm install -g codebase-memory-mcp@latest",
+  };
+}
+
 function runCommand(command, args, options = {}) {
   return new Promise((resolve) => {
     const isWindows = process.platform === "win32";
-    const fullCmd = isWindows ? `${command} ${args.join(" ")}` : command;
+    const quotedCmd =
+      isWindows && !command.startsWith('"') && command.includes(" ")
+        ? `"${command}"`
+        : command;
+    const fullCmd = isWindows ? `${quotedCmd} ${args.join(" ")}` : command;
 
+    const callback = (error, stdout, stderr) => {
+      resolve({
+        code: error ? error.code || 1 : 0,
+        stdout: stdout || "",
+        stderr: stderr || "",
+        error: error ? error.message : null,
+      });
+    };
+
+    let child;
     if (isWindows) {
-      exec(
+      child = exec(
         fullCmd,
         {
           timeout: options.timeout || 600000,
           maxBuffer: 10 * 1024 * 1024,
           ...options,
         },
-        (error, stdout, stderr) => {
-          resolve({
-            code: error ? error.code || 1 : 0,
-            stdout: stdout || "",
-            stderr: stderr || "",
-            error: error ? error.message : null,
-          });
-        }
+        callback
       );
     } else {
-      execFile(
+      child = execFile(
         command,
         args,
         {
@@ -91,39 +111,311 @@ function runCommand(command, args, options = {}) {
           maxBuffer: 10 * 1024 * 1024,
           ...options,
         },
-        (error, stdout, stderr) => {
-          resolve({
-            code: error ? error.code || 1 : 0,
-            stdout: stdout || "",
-            stderr: stderr || "",
-            error: error ? error.message : null,
-          });
-        }
+        callback
       );
+    }
+
+    if (child && child.stdin) {
+      if (options.input) {
+        child.stdin.write(options.input);
+      }
+      child.stdin.end();
     }
   });
 }
 
-export async function listIndexedProjects() {
-  const cbmExe = findCodebaseMemoryExecutable();
-  if (!cbmExe) return [];
-
+/**
+ * Read and parse local repository .codebase-memory/artifact.json if it exists.
+ */
+export function readLocalRepoArtifact(repoPath) {
+  if (!repoPath) return null;
   try {
-    const res = await runCommand(cbmExe, ["cli", "--json", "list_projects"], {
-      timeout: 30000,
-    });
-    const combined = res.stdout + "\n" + res.stderr;
-    for (const line of combined.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("{") && trimmed.includes('"projects"')) {
-        const parsed = JSON.parse(trimmed);
-        return parsed.projects || [];
+    const resolved = path.resolve(repoPath);
+    const artifactPath = path.join(resolved, ".codebase-memory", "artifact.json");
+    if (fs.existsSync(artifactPath) && fs.statSync(artifactPath).isFile()) {
+      const content = fs.readFileSync(artifactPath, "utf-8");
+      const data = JSON.parse(content);
+      const stat = fs.statSync(artifactPath);
+      return {
+        name: data.project || path.basename(resolved),
+        project_id: data.project || path.basename(resolved),
+        root_path: resolved.replace(/\\/g, "/"),
+        is_indexed: true,
+        nodes: typeof data.nodes === "number" ? data.nodes : null,
+        edges: typeof data.edges === "number" ? data.edges : null,
+        commit: data.commit || null,
+        indexed_at: data.indexed_at || stat.mtime.toISOString(),
+        artifact_path: artifactPath.replace(/\\/g, "/"),
+        source: "local_artifact",
+      };
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Scan global codebase-memory-mcp cache directory (~/.cache/codebase-memory-mcp) for indexed .db files.
+ */
+export function scanGlobalCbmCache() {
+  const results = [];
+  const candidateDirs = [
+    path.join(os.homedir(), ".cache", "codebase-memory-mcp"),
+    path.join(os.homedir(), ".codebase-memory"),
+  ];
+
+  if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+    candidateDirs.push(
+      path.join(process.env.LOCALAPPDATA, "codebase-memory-mcp"),
+      path.join(process.env.LOCALAPPDATA, "cache", "codebase-memory-mcp")
+    );
+  }
+
+  for (const dir of candidateDirs) {
+    if (!fs.existsSync(dir)) continue;
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith(".db") && !entry.name.startsWith("_")) {
+          const dbPath = path.join(dir, entry.name);
+          const projectName = entry.name.slice(0, -3); // remove .db
+          try {
+            const stat = fs.statSync(dbPath);
+            results.push({
+              name: projectName,
+              project_id: projectName,
+              db_path: dbPath.replace(/\\/g, "/"),
+              size_bytes: stat.size,
+              last_modified: stat.mtime.toISOString(),
+              is_indexed: true,
+              source: "global_cache",
+            });
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  return results;
+}
+
+export async function listIndexedProjects(targetRegistryOrWorkspace = null) {
+  const projectMap = new Map();
+
+  function mergeEntry(key, newEntry) {
+    if (!key) return;
+    const k = key.toLowerCase();
+    const existing = projectMap.get(k) || {};
+    const merged = {
+      ...existing,
+      ...newEntry,
+      nodes:
+        typeof newEntry.nodes === "number"
+          ? newEntry.nodes
+          : typeof existing.nodes === "number"
+          ? existing.nodes
+          : null,
+      edges:
+        typeof newEntry.edges === "number"
+          ? newEntry.edges
+          : typeof existing.edges === "number"
+          ? existing.edges
+          : null,
+      commit: newEntry.commit || existing.commit || null,
+      indexed_at: newEntry.indexed_at || existing.indexed_at || null,
+      artifact_path: newEntry.artifact_path || existing.artifact_path || null,
+      db_path: newEntry.db_path || existing.db_path || null,
+      is_indexed: true,
+    };
+    projectMap.set(k, merged);
+  }
+
+  // 1. Scan global cache directory first (fast & non-blocking)
+  const cached = scanGlobalCbmCache();
+  for (const c of cached) {
+    mergeEntry(c.project_id, c);
+    mergeEntry(c.name, c);
+  }
+
+  // 2. Scan known project repositories if available
+  try {
+    let registryList = [];
+    if (targetRegistryOrWorkspace) {
+      try {
+        const reg = loadRegistry(targetRegistryOrWorkspace);
+        registryList.push(reg);
+      } catch {}
+    }
+
+    const available = listAvailableProjects();
+    for (const proj of available) {
+      if (proj.registry_path && fs.existsSync(proj.registry_path)) {
+        try {
+          const reg = loadRegistry(proj.registry_path);
+          registryList.push(reg);
+        } catch {}
       }
     }
-  } catch (err) {
-    console.warn("[WARN] Failed to list indexed projects:", err.message);
+
+    for (const reg of registryList) {
+      const regDir = reg.source_path ? path.dirname(reg.source_path) : process.cwd();
+      for (const repo of reg.repos || []) {
+        const fullRepoPath = repo.local_path
+          ? (path.isAbsolute(repo.local_path) ? repo.local_path : path.resolve(regDir, repo.local_path))
+          : null;
+        if (fullRepoPath) {
+          const art = readLocalRepoArtifact(fullRepoPath);
+          if (art) {
+            art.repo_name = repo.name;
+            const slug = deriveCbmSlug(fullRepoPath);
+            mergeEntry(art.project_id, art);
+            mergeEntry(repo.name, art);
+            mergeEntry(slug, art);
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // 3. Attempt CLI query with a non-blocking timeout to query active CBM daemon
+  const cbmExe = findCodebaseMemoryExecutable();
+  if (cbmExe) {
+    try {
+      const res = await runCommand(cbmExe, ["cli", "--json", "list_projects"], {
+        timeout: 30000,
+      });
+      const parsedProjects = extractProjectsFromCbmOutput(res.stdout, res.stderr);
+      for (const p of parsedProjects) {
+        const key = (p.name || p.project_id || "").toLowerCase();
+        if (key) {
+          mergeEntry(key, { ...p, source: "cli" });
+        }
+      }
+    } catch {}
   }
-  return [];
+
+  // Deduplicate results by unique project_id / name
+  const seen = new Set();
+  const finalResults = [];
+  for (const item of projectMap.values()) {
+    const id = (item.project_id || item.name || "").toLowerCase();
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      finalResults.push(item);
+    }
+  }
+
+  return finalResults;
+}
+
+/**
+ * Extract projects array from codebase-memory-mcp CLI output (supports plain JSON, structuredContent, and MCP text).
+ */
+export function extractProjectsFromCbmOutput(stdout, stderr) {
+  const combined = (stdout || "") + "\n" + (stderr || "");
+  const projects = [];
+
+  for (const line of combined.split("\n")) {
+    const trimmed = line.trim();
+    if (
+      trimmed.startsWith("{") &&
+      (trimmed.includes('"projects"') ||
+        trimmed.includes('"structuredContent"') ||
+        trimmed.includes('"content"'))
+    ) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed.projects)) {
+          projects.push(...parsed.projects);
+        }
+        if (parsed.structuredContent && Array.isArray(parsed.structuredContent.projects)) {
+          projects.push(...parsed.structuredContent.projects);
+        }
+        if (Array.isArray(parsed.content)) {
+          for (const item of parsed.content) {
+            if (item && item.type === "text" && item.text) {
+              try {
+                const subParsed = JSON.parse(item.text);
+                if (Array.isArray(subParsed.projects)) {
+                  projects.push(...subParsed.projects);
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  if (projects.length === 0) {
+    const jsonMatch = combined.match(/\{[\s\S]*"projects"[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed.projects)) {
+          projects.push(...parsed.projects);
+        } else if (parsed.structuredContent && Array.isArray(parsed.structuredContent.projects)) {
+          projects.push(...parsed.structuredContent.projects);
+        }
+      } catch {}
+    }
+  }
+
+  return projects;
+}
+
+export function deriveCbmSlug(localPath) {
+  return String(localPath || "")
+    .trim()
+    .replace(/^[/\\]+/, "")
+    .replace(/[/\\]+$/, "")
+    .replace(/[:/\\]+/g, "-");
+}
+
+/**
+ * Check if a repository is indexed in local artifact or global CBM cache.
+ */
+export function getRepoIndexInfo(repoPath, repoName = "", globalCached = null) {
+  // 1. Check local artifact.json
+  if (repoPath) {
+    const localArt = readLocalRepoArtifact(repoPath);
+    if (localArt) {
+      return {
+        is_indexed: true,
+        index_nodes: localArt.nodes,
+        index_edges: localArt.edges,
+        indexed_at: localArt.indexed_at,
+        index_project: localArt.project_id,
+        source: "local_artifact",
+      };
+    }
+  }
+
+  // 2. Check global cache
+  const cacheList = globalCached || scanGlobalCbmCache();
+  const slug = repoPath ? deriveCbmSlug(repoPath).toLowerCase() : "";
+  const nameLower = (repoName || "").toLowerCase();
+
+  for (const item of cacheList) {
+    const itemName = (item.name || item.project_id || "").toLowerCase();
+    if ((nameLower && itemName === nameLower) || (slug && itemName === slug)) {
+      return {
+        is_indexed: true,
+        index_nodes: typeof item.nodes === "number" ? item.nodes : null,
+        index_edges: typeof item.edges === "number" ? item.edges : null,
+        indexed_at: item.indexed_at || item.last_modified || null,
+        index_project: item.name || item.project_id,
+        source: item.source || "global_cache",
+      };
+    }
+  }
+
+  return {
+    is_indexed: false,
+    index_nodes: null,
+    index_edges: null,
+    indexed_at: null,
+    index_project: null,
+  };
 }
 
 export async function deleteIndexedGraph(projectName) {
@@ -162,14 +454,6 @@ export async function deleteIndexedGraph(projectName) {
       error: err.message,
     };
   }
-}
-
-function deriveCbmSlug(localPath) {
-  return localPath
-    .trim()
-    .replace(/^[/\\]+/, "")
-    .replace(/[/\\]+$/, "")
-    .replace(/[:/\\]+/g, "-");
 }
 
 export async function purgeProjectGraphs(registryOrTarget = null) {

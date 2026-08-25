@@ -9,7 +9,7 @@ An extensible Multi-Repo Architecture Router and Model Context Protocol (MCP) se
 
 ---
 
-## ⚡ Quick Start (3-Minute Setup)
+## ⚡ Quick Start
 
 ### 1. Prerequisites
 Ensure you have **Node.js (>= 18)** and **codebase-memory-mcp** installed globally:
@@ -23,9 +23,30 @@ npm install -g codebase-memory-mcp@latest
 git clone https://github.com/Abbilville/oss-mcp oss-mcp
 cd oss-mcp
 npm install
+npm link # (Optional) links oss-mcp CLI globally
 ```
 
-### 3. Initialize Any Multi-Repo Workspace
+### 3. Auto-Configure Your AI Agent (Antigravity / Claude / Cursor / Codex)
+Run the interactive wizard to automatically inject the MCP server configuration, guidelines, and multi-repo skills into your AI agent:
+```bash
+npm run setup:agent
+```
+
+#### Installation Scopes:
+- **Global Scope (Recommended)**: Registers `oss-mcp` across all projects on your machine (in `~/.gemini/config/`, `%APPDATA%\Claude\`, `~/.codex/config.json`). Every project you open in your AI assistant will immediately have access to `oss-mcp` without extra per-project configuration.
+  ```bash
+  npx oss-mcp setup-agent --agent all --global
+  ```
+- **Workspace / Local Scope**: Injects configuration and skill files (`.agents/`, `.cursor/`, `CLAUDE.md`, `CODEX.md`) only inside a specific target directory.
+  ```bash
+  npx oss-mcp setup-agent --agent all --workspace /path/to/your/workspace
+  ```
+
+#### Updating & Uninstalling Agents:
+- **Update Skills & Configs**: `npm run update:agent` or `npx oss-mcp update --agent all --global`
+- **Uninstall from Agents**: `npm run uninstall:agent` or `npx oss-mcp uninstall --agent all --global`
+
+### 4. Initialize Any Multi-Repo Workspace
 Point `oss-mcp` to your microservices directory. It will scan the repositories, generate `registry.yaml`, and automatically batch-index the code into AST knowledge graphs:
 ```bash
 npx oss-mcp setup /path/to/your/microservices-workspace
@@ -35,35 +56,36 @@ npx oss-mcp setup /path/to/your/microservices-workspace
 
 ## 🚀 Key Capabilities
 
-1. **Multi-Project Dynamic Discovery**: Resolves repository manifests (`registry.yaml`) dynamically from CLI parameters, central catalogs (`data/projects.yaml`), environment variables, or workspace hierarchy.
+1. **Multi-Project Dynamic Discovery**: Resolves repository manifests (`registry.yaml`) dynamically from CLI parameters, workspace hierarchy, machine catalogs (`~/.config/oss-mcp/projects.yaml`), or environment variables.
 2. **Automated Structure & Dependency Scanner**: Recursively inspects directory trees across multiple tech stacks (Node.js, Express, React, Python, FastAPI, Java, Go), detecting entry points, ports, and inter-service HTTP/event relationships.
 3. **Automated Batch AST Indexing**: Orchestrates `codebase-memory-mcp` AST graph indexing across all services in a project manifest with a single command.
 4. **Structured MCP Interface**: Exposes standardized tools for AI agents to query cross-service architectures, trace end-to-end request lifecycles, and navigate multi-service boundaries.
 
 ---
 
-## 📁 Working with the `data/` Directory
+## 📁 Architecture & Manifest Schema
 
-The `data/` directory provides centralized project management for environments hosting multiple distinct microservice projects or systems.
+`oss-mcp` uses a clean, zero-clutter project structure:
 
 ```text
 data/
-├── projects.yaml         # Central multi-project catalog (routes project IDs to manifests)
-├── registry.yaml         # Default / sample repository manifest and service relationships
-├── projects.yaml.example # Reference template for projects catalog
+├── projects.yaml.example # Reference template for machine-wide catalog
 └── registry.yaml.example # Reference template for repository manifests
 ```
 
-### 1. Central Project Catalog (`data/projects.yaml`)
-If you manage multiple projects on your machine, register them in `data/projects.yaml` (or `~/.config/oss-mcp/projects.yaml`). This lets you target any project by ID (e.g. `npx oss-mcp index --project ecommerce`):
+### 1. Workspace Manifest (`registry.yaml`)
+When you run `npx oss-mcp setup` or `npx oss-mcp scan`, it creates a `registry.yaml` at the root of your microservices workspace defining its individual services, metadata, entry points, ports, and relationships.
+
+### 2. Optional Multi-Project Catalog (`~/.config/oss-mcp/projects.yaml`)
+If you manage multiple distinct microservices projects across your machine, you can optionally register them in `~/.config/oss-mcp/projects.yaml` (or via `MCP_PROJECTS_CATALOG` environment variable). This lets you target any project by ID (e.g. `npx oss-mcp index --project ecommerce`):
 
 ```yaml
-# data/projects.yaml
+# ~/.config/oss-mcp/projects.yaml
 projects:
   ecommerce:
     name: "E-Commerce Microservices"
     description: "Frontend SPA, API Gateway, Auth Service, and Order Service"
-    registry_path: "./data/ecommerce_registry.yaml"
+    registry_path: "/path/to/ecommerce/registry.yaml"
     root_path: "/path/to/ecommerce/workspace"
 
   analytics:
@@ -132,7 +154,7 @@ When executing tools or CLI commands, `oss-mcp` determines which registry to loa
 
 ```
 1. Explicit Flag / Parameter   (--project "ecommerce" or --registry "/path/to/registry.yaml")
-   └── 2. Central Projects Catalog (data/projects.yaml or ~/.config/oss-mcp/projects.yaml)
+   └── 2. Machine Projects Catalog (~/.config/oss-mcp/projects.yaml or MCP_PROJECTS_CATALOG)
        └── 3. Environment Variable   (export MCP_REGISTRY_PATH="/path/to/registry.yaml")
            └── 4. Workspace Traversal (searching current directory & parent folders for registry.yaml)
 ```
@@ -143,6 +165,9 @@ When executing tools or CLI commands, `oss-mcp` determines which registry to loa
 
 | Action | Command | Description |
 | :--- | :--- | :--- |
+| **Auto-Setup Agents** | `npm run setup:agent` or `npx oss-mcp setup-agent [agent]` | Automatically configures MCP server, rules, and skills for your AI agent(s). |
+| **Update / Re-Sync** | `npm run update:agent` or `npx oss-mcp update [agent]` | Re-syncs latest MCP server paths, rules, and multi-repo skills across AI agents. |
+| **Uninstall Agents** | `npm run uninstall:agent` or `npx oss-mcp uninstall [agent]` | Removes MCP server configuration, guidelines, and skills from target agent(s). |
 | **Onboard Workspace** | `npx oss-mcp setup /path/to/workspace` | Scans workspace, writes `registry.yaml`, and batch-indexes all services. |
 | **Scan Directory** | `npx oss-mcp scan /path/to/workspace -o ./registry.yaml` | Scans directories, infers entry points/ports, and outputs manifest. |
 | **Batch Index** | `npx oss-mcp index --registry ./registry.yaml` | Indexes all manifest repos into `codebase-memory-mcp`. |
@@ -160,7 +185,7 @@ When executing tools or CLI commands, `oss-mcp` determines which registry to loa
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                       AI Agent Layer                        │
-│   (Antigravity / Claude Code / Cursor / Codex / Roo Code)   │
+│        (Antigravity / Claude Code / Cursor / Codex)         │
 └──────────────────────────────┬──────────────────────────────┘
                                │
                ┌───────────────┴───────────────┐
@@ -177,7 +202,7 @@ When executing tools or CLI commands, `oss-mcp` determines which registry to loa
 
 ---
 
-### 1. 🪐 Google Antigravity (AGY)
+### 1. Google Antigravity (AGY)
 
 #### A. Configure MCP Server
 Add `oss-mcp` to your project's `.agents/mcp_config.json` or globally in `~/.gemini/config/mcp_config.json`:
@@ -210,7 +235,7 @@ Type these commands directly in Antigravity chat:
 
 ---
 
-### 2. ⚡ Claude Code (CLI) & Claude Desktop
+### 2. Claude Code (CLI) & Claude Desktop
 
 #### A. Claude Code CLI Setup
 Add the MCP server directly using the `claude mcp add` command:
@@ -266,7 +291,7 @@ When answering questions about cross-service interactions, microservices, or API
 
 ---
 
-### 3. 🎯 Cursor IDE
+### 3. Cursor IDE
 
 #### A. Add MCP Server in Cursor
 1. Go to **Cursor Settings** $\rightarrow$ **Features** $\rightarrow$ **MCP**.
@@ -298,34 +323,35 @@ When the user asks about multi-service architecture or cross-repo communication:
 
 ---
 
-### 4. 🧩 Roo Code / Cline / Codex (VS Code Extensions)
+### 4. OpenAI Codex / Codex CLI
 
 #### A. Configure MCP Settings
-Open `cline_mcp_settings.json` (or `roo_cline_mcp_settings.json`):
+Add `oss-mcp` to your Codex configuration file (e.g. `~/.codex/config.json` or `.codex/config.json`):
 
 ```json
 {
   "mcpServers": {
     "oss-mcp": {
       "command": "node",
-      "args": ["/absolute/path/to/oss-mcp/src/server.js"],
-      "disabled": false,
-      "autoApprove": [
-        "get_architecture_overview",
-        "get_repo_details",
-        "get_related_repos",
-        "list_projects"
-      ]
+      "args": ["/absolute/path/to/oss-mcp/src/server.js"]
     }
   }
 }
 ```
 
-#### B. Custom Instructions
-Add to your Custom Instructions in Cline / Roo Code settings:
-```text
-When working across multiple repositories, use the `oss-mcp` MCP tools to inspect service dependencies and ports before making code modifications or answering architectural questions.
+#### B. Codex Instructions (`CODEX.md` or `.codex/instructions.md`)
+Add this guideline to your project's `CODEX.md` to instruct Codex on routing multi-repository queries:
+```markdown
+## Multi-Repo Architecture Navigation
+When answering questions about cross-service interactions, microservices, or APIs:
+1. Call `oss-mcp` tool `get_architecture_overview()` to discover architecture topology and service boundaries.
+2. Query `codebase-memory-mcp` (`search_graph`, `trace_path`, `get_code_snippet`) scoped to the relevant repository.
+3. Provide end-to-end flow explanations with dependency contracts.
 ```
+
+#### C. Example Chat Prompts in Codex
+- *"Use get_architecture_overview to inspect dependencies across our microservices."*
+- *"Trace the authentication flow from the frontend client to the auth microservice."*
 
 ---
 
@@ -350,7 +376,7 @@ Skills in `.agents/skills/` encapsulate complete end-to-end multi-repo workflows
 | `get_architecture_overview` | `project?: str` | JSON | Returns complete repository manifest, service metadata, and relationship graph. |
 | `get_repo_details` | `repo_name: str, project?: str` | JSON | Returns detailed information for a single repository, including ports, stack, and direct connections. |
 | `get_related_repos` | `repo_name: str, direction?: str, project?: str` | JSON | Returns connected dependencies (`inbound`, `outbound`, or `all`). |
-| `list_projects` | None | JSON | Lists catalog projects and indexed `codebase-memory-mcp` graph database statistics. |
+| `list_projects` | `project?: str` | JSON | Lists catalog projects and indexed `codebase-memory-mcp` graph database statistics. |
 | `scan_and_create_registry` | `workspace_path: str, output_file?: str` | JSON | Scans directory, infers dependencies, and generates a manifest file. |
 | `index_project_repositories` | `project?: str, mode?: str` | JSON | Batch indexes repositories into `codebase-memory-mcp`. |
 | `remove_project` | `project: str, purge_graphs?: bool, delete_manifest?: bool` | JSON | Purges indexed graphs and unregisters project from catalog. |

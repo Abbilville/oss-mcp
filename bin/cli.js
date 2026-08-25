@@ -22,6 +22,7 @@ import {
 } from "../src/registry.js";
 import { scanWorkspace } from "../src/scanner.js";
 import { run as runServer } from "../src/server.js";
+import { runAgentSetup, runAgentUninstall, runAgentUpdate } from "../src/agent-setup.js";
 
 const program = new Command();
 
@@ -227,14 +228,34 @@ program
 
 // 5. Projects Command
 program
-  .command("projects")
+  .command("projects [target]")
   .description(
     "List all registered projects in the catalog and indexed codebase-memory-mcp graphs"
   )
-  .action(async () => {
+  .option("-p, --project <id>", "Project ID from catalog")
+  .option("-r, --registry <path>", "Path to custom registry.yaml")
+  .option("--json", "Output raw JSON representation")
+  .action(async (target, options) => {
     try {
+      const inspectTarget = target || options.project || options.registry;
       const catalogProjects = listAvailableProjects();
-      const indexedGraphs = await listIndexedProjects();
+      const indexedGraphs = await listIndexedProjects(inspectTarget);
+
+      if (options.json) {
+        console.log(
+          JSON.stringify(
+            {
+              registered_projects: catalogProjects,
+              indexed_codebase_memory_graphs: indexedGraphs,
+              total_registered_projects: catalogProjects.length,
+              total_indexed_graphs: indexedGraphs.length,
+            },
+            null,
+            2
+          )
+        );
+        return;
+      }
 
       console.log("\n=== Registered Multi-Repo Projects ===");
       if (catalogProjects.length === 0) {
@@ -292,27 +313,41 @@ program
   .action(async (projectIdOrPath, options) => {
     console.log(`[INFO] Decommissioning project: ${projectIdOrPath}...`);
     try {
-      const registry = loadRegistry(projectIdOrPath);
-
-      if (options.purgeGraphs) {
-        console.log(
-          `[INFO] Purging knowledge graphs for ${registry.repos.length} repositories...`
-        );
-        const purgeReport = await purgeProjectGraphs(registry);
-        console.log(
-          `[INFO] Purged ${purgeReport.purged}/${purgeReport.total_repos} graphs.`
-        );
+      let registry = null;
+      try {
+        registry = loadRegistry(projectIdOrPath);
+      } catch (err) {
+        console.warn(`[WARN] Manifest file could not be loaded (${err.message}). Proceeding with catalog & graph cleanup...`);
       }
 
-      const unregistered = unregisterProjectFromCatalog(registry.project_id);
+      const pId = registry ? registry.project_id : String(projectIdOrPath);
+
+      if (options.purgeGraphs) {
+        if (registry) {
+          console.log(
+            `[INFO] Purging knowledge graphs for ${registry.repos.length} repositories...`
+          );
+          const purgeReport = await purgeProjectGraphs(registry);
+          console.log(
+            `[INFO] Purged ${purgeReport.purged}/${purgeReport.total_repos} graphs.`
+          );
+        } else {
+          console.log(`[INFO] Purging knowledge graph for: ${pId}...`);
+          const res = await deleteIndexedGraph(pId);
+          console.log(`[INFO] Result: ${res.status}`);
+        }
+      }
+
+      const unregistered = unregisterProjectFromCatalog(pId);
       if (unregistered) {
         console.log(
-          `[INFO] Unregistered '${registry.project_id}' from projects catalog.`
+          `[INFO] Unregistered '${pId}' from projects catalog.`
         );
       }
 
       if (
         options.deleteManifest &&
+        registry &&
         registry.source_path &&
         fs.existsSync(registry.source_path)
       ) {
@@ -321,7 +356,7 @@ program
       }
 
       console.log(
-        `[INFO] Successfully removed project '${registry.project_id}'.`
+        `[INFO] Successfully removed project '${pId}'.`
       );
     } catch (exc) {
       console.error(`[ERROR] Failed to remove project: ${exc.message}`);
@@ -339,6 +374,78 @@ program
       process.env.MCP_REGISTRY_PATH = path.resolve(options.registry);
     }
     await runServer();
+  });
+
+// 8. Setup Agent Command
+program
+  .command("setup-agent [agent]")
+  .alias("setup:agent")
+  .description(
+    "Automatically configure MCP server, rules, and skills for AI agents (antigravity, claude, cursor, codex, or all)"
+  )
+  .option("-w, --workspace <path>", "Target workspace path", process.cwd())
+  .option("-g, --global", "Configure globally where applicable", false)
+  .action((agent, options) => {
+    const chosenAgent = agent || "all";
+    const targetWs = path.resolve(options.workspace);
+    console.log(`[INFO] Setting up oss-mcp for agent: ${chosenAgent} (Workspace: ${targetWs})`);
+    const results = runAgentSetup(chosenAgent, targetWs, options.global);
+    for (const [name, logs] of Object.entries(results)) {
+      console.log(`\n--- ${name} ---`);
+      for (const log of logs) {
+        console.log(`  ${log}`);
+      }
+    }
+    console.log("\n[INFO] AI Agent configuration completed.");
+  });
+
+// 9. Uninstall Agent Command
+program
+  .command("uninstall [agent]")
+  .alias("uninstall-agent")
+  .description(
+    "Remove oss-mcp MCP server configuration, rules, and multi-repo skills from AI agents"
+  )
+  .option("-w, --workspace <path>", "Target workspace path", process.cwd())
+  .option("-g, --global", "Uninstall from global configuration", false)
+  .option("--clean-cache", "Also purge global ~/.config/oss-mcp/ catalog", false)
+  .action((agent, options) => {
+    const chosenAgent = agent || "all";
+    const targetWs = path.resolve(options.workspace);
+    const scopeLabel = options.global ? "Global" : `Workspace (${targetWs})`;
+    console.log(`[INFO] Uninstalling oss-mcp from agent: ${chosenAgent} [Scope: ${scopeLabel}]`);
+    const results = runAgentUninstall(chosenAgent, targetWs, options.global, options.cleanCache);
+    for (const [name, logs] of Object.entries(results)) {
+      console.log(`\n--- ${name} ---`);
+      for (const log of logs) {
+        console.log(`  ${log}`);
+      }
+    }
+    console.log("\n[INFO] oss-mcp uninstallation completed.");
+  });
+
+// 10. Update Agent Command
+program
+  .command("update [agent]")
+  .alias("update-agent")
+  .description(
+    "Re-sync and update MCP server paths, rules, and multi-repo skills to the latest version"
+  )
+  .option("-w, --workspace <path>", "Target workspace path", process.cwd())
+  .option("-g, --global", "Update in global configuration", false)
+  .action(async (agent, options) => {
+    const chosenAgent = agent || "all";
+    const targetWs = path.resolve(options.workspace);
+    const scopeLabel = options.global ? "Global" : `Workspace (${targetWs})`;
+    console.log(`[INFO] Updating oss-mcp for agent: ${chosenAgent} [Scope: ${scopeLabel}]`);
+    const results = await runAgentUpdate(chosenAgent, targetWs, options.global);
+    for (const [name, logs] of Object.entries(results)) {
+      console.log(`\n--- ${name} ---`);
+      for (const log of logs) {
+        console.log(`  ${log}`);
+      }
+    }
+    console.log("\n[INFO] oss-mcp update completed successfully.");
   });
 
 program.parse(process.argv);

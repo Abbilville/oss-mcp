@@ -66,5 +66,5 @@ index_project_repositories(
 
 ### Step 4: Register the Project
 Ensure the project is registered for future sessions:
-- **Workspace-local**: Leave `registry.yaml` at the project root or `.agents/registry.yaml`.
-- **Central Catalog**: Add entry to `data/projects.yaml` (or `~/.config/oss-mcp/projects.yaml`).
+- **Workspace-local**: Leave `registry.yaml` at the project root or `.agents/registry.yaml` (auto-detected).
+- **Machine Catalog**: Add entry to `~/.config/oss-mcp/projects.yaml` (or via `MCP_PROJECTS_CATALOG` environment variable).

@@ -14,6 +14,7 @@ import path from "node:path";
 import os from "node:os";
 import yaml from "js-yaml";
 import { fileURLToPath } from "node:url";
+import { getRepoIndexInfo } from "./indexer.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,8 +22,6 @@ const __dirname = path.dirname(__filename);
 // Base paths
 const PACKAGE_DIR = __dirname;
 const PROJECT_ROOT = path.resolve(PACKAGE_DIR, "..");
-const DEFAULT_REGISTRY = path.join(PROJECT_ROOT, "data", "registry.yaml");
-const DEFAULT_PROJECTS_CATALOG = path.join(PROJECT_ROOT, "data", "projects.yaml");
 const USER_CONFIG_DIR = path.join(os.homedir(), ".config", "oss-mcp");
 const USER_PROJECTS_CATALOG = path.join(USER_CONFIG_DIR, "projects.yaml");
 
@@ -135,20 +134,36 @@ export class ProjectRegistry {
   }
 
   toOverviewDict() {
+    const baseDir = this.source_path ? path.dirname(this.source_path) : process.cwd();
     return {
       project_id: this.project_id,
       project_name: this.name || this.project_id,
       description: this.description,
       source_path: this.source_path ? String(this.source_path) : null,
-      repos: this.repos.map((r) => ({
-        name: r.name,
-        owner: r.owner,
-        local_path: r.local_path,
-        description: r.description,
-        tech_stack: r.tech_stack,
-        entry_point: r.entry_point,
-        port: r.port,
-      })),
+      repos: this.repos.map((r) => {
+        const repoData = {
+          name: r.name,
+          owner: r.owner,
+          local_path: r.local_path,
+          description: r.description,
+          tech_stack: r.tech_stack,
+          entry_point: r.entry_point,
+          port: r.port,
+        };
+
+        const fullPath = r.local_path
+          ? (path.isAbsolute(r.local_path) ? r.local_path : path.resolve(baseDir, r.local_path))
+          : null;
+
+        const idxInfo = getRepoIndexInfo(fullPath, r.name);
+        repoData.is_indexed = idxInfo.is_indexed;
+        repoData.index_nodes = idxInfo.index_nodes;
+        repoData.index_edges = idxInfo.index_edges;
+        repoData.indexed_at = idxInfo.indexed_at;
+        repoData.index_project = idxInfo.index_project;
+
+        return repoData;
+      }),
       relationships: this.relationships.map((rel) => ({
         source: rel.source,
         target: rel.target,
@@ -178,8 +193,6 @@ function discoverWorkspaceRegistry(startDir = null) {
     ".repo-registry.yml",
     ".agents/registry.yaml",
     ".agents/registry.yml",
-    "data/registry.yaml",
-    "data/registry.yml",
   ];
 
   while (true) {
@@ -198,32 +211,35 @@ function discoverWorkspaceRegistry(startDir = null) {
 
 export function getProjectsCatalog() {
   const catalogPaths = [
-    process.env.MCP_PROJECTS_CATALOG,
     USER_PROJECTS_CATALOG,
-    DEFAULT_PROJECTS_CATALOG,
+    process.env.MCP_PROJECTS_CATALOG,
   ].filter(Boolean);
 
+  const merged = {};
   for (const cPath of catalogPaths) {
     if (fs.existsSync(cPath) && fs.statSync(cPath).isFile()) {
       try {
         const content = fs.readFileSync(cPath, "utf-8");
         const data = yaml.load(content);
-        if (data && typeof data === "object" && data.projects) {
-          return data.projects;
+        if (data && typeof data === "object" && data.projects && typeof data.projects === "object") {
+          for (const [pid, pinfo] of Object.entries(data.projects)) {
+            if (pinfo && typeof pinfo === "object") {
+              merged[pid] = { ...pinfo };
+            }
+          }
         }
       } catch (err) {
         console.warn(`[WARN] Failed to load projects catalog from ${cPath}:`, err.message);
       }
     }
   }
-  return {};
+  return merged;
 }
 
 export function unregisterProjectFromCatalog(projectId) {
   const catalogPaths = [
-    process.env.MCP_PROJECTS_CATALOG,
     USER_PROJECTS_CATALOG,
-    DEFAULT_PROJECTS_CATALOG,
+    process.env.MCP_PROJECTS_CATALOG,
   ].filter(Boolean);
 
   let removed = false;
@@ -259,27 +275,51 @@ export function listAvailableProjects() {
     });
   }
 
-  if (fs.existsSync(DEFAULT_REGISTRY) && fs.statSync(DEFAULT_REGISTRY).isFile()) {
-    if (!projects.some((p) => p.project_id === "oss" || p.project_id === "sample-project")) {
-      projects.push({
-        project_id: "default",
-        name: "Default Sample Project",
-        description: "Default multi-repo registry in oss-mcp/data/registry.yaml",
-        registry_path: DEFAULT_REGISTRY,
-        root_path: PROJECT_ROOT,
-      });
-    }
+  // Include active workspace project if a registry.yaml is present in the workspace
+  const workspaceReg = discoverWorkspaceRegistry();
+  if (workspaceReg && fs.existsSync(workspaceReg)) {
+    try {
+      const content = fs.readFileSync(workspaceReg, "utf-8");
+      const raw = yaml.load(content) || {};
+      const pId = raw.project_id || path.basename(path.dirname(workspaceReg));
+      if (!projects.some((p) => p.project_id === pId || p.registry_path === workspaceReg)) {
+        projects.unshift({
+          project_id: pId,
+          name: raw.name || pId,
+          description: raw.description || `Active workspace project (${path.dirname(workspaceReg)})`,
+          registry_path: workspaceReg,
+          root_path: path.dirname(workspaceReg),
+        });
+      }
+    } catch {}
   }
 
   return projects;
 }
 
 export function resolveRegistryPath(target = null) {
-  // 1. Direct file path
+  // 1. Direct file or directory path
   if (target) {
     const targetPath = path.resolve(String(target));
-    if (fs.existsSync(targetPath) && fs.statSync(targetPath).isFile()) {
-      return targetPath;
+    if (fs.existsSync(targetPath)) {
+      if (fs.statSync(targetPath).isFile()) {
+        return targetPath;
+      }
+      if (fs.statSync(targetPath).isDirectory()) {
+        const candidateNames = [
+          "registry.yaml",
+          "registry.yml",
+          ".repo-registry.yaml",
+          ".repo-registry.yml",
+          ".agents/registry.yaml",
+        ];
+        for (const cand of candidateNames) {
+          const candPath = path.join(targetPath, cand);
+          if (fs.existsSync(candPath) && fs.statSync(candPath).isFile()) {
+            return path.resolve(candPath);
+          }
+        }
+      }
     }
 
     // Direct lookup in projects catalog
@@ -312,15 +352,12 @@ export function resolveRegistryPath(target = null) {
     return workspacePath;
   }
 
-  // 4. Default fallback
-  if (fs.existsSync(DEFAULT_REGISTRY) && fs.statSync(DEFAULT_REGISTRY).isFile()) {
-    return path.resolve(DEFAULT_REGISTRY);
-  }
-
   throw new Error(
-    "Could not resolve any registry.yaml. Provide a path, set MCP_REGISTRY_PATH, or run `npx oss-mcp setup`."
+    "No registry.yaml found in the current workspace. Run `npx oss-mcp setup <workspace_path>` or provide `--registry <path>`."
   );
 }
+
+
 
 export function loadRegistry(target = null) {
   const registryPath = resolveRegistryPath(target);

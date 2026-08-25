@@ -10,6 +10,9 @@
   "scripts": {
     "start": "node src/server.js",
     "oss-mcp": "node bin/cli.js",
+    "setup:agent": "node bin/setup-agent.js",
+    "update:agent": "node bin/setup-agent.js --update",
+    "uninstall:agent": "node bin/setup-agent.js --uninstall",
     "test": "node --test test/**/*.test.js"
   },
   "author": "Abbilville",

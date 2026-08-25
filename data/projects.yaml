@@ -1,9 +1,0 @@
-# Central Multi-Project Registry Catalog
-# Register any multi-repo ecosystem here by assigning a project key and pointing to its registry.yaml
-
-projects:
-  sample-project:
-    name: "Sample Microservices Architecture"
-    description: "Sample ecosystem featuring web-frontend and auth-service"
-    registry_path: "./data/registry.yaml"
-    root_path: "./services"
